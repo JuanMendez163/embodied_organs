@@ -126,9 +126,11 @@ class GridWorld:
         r, c = pos
         return 0 <= r < self.grid_size and 0 <= c < self.grid_size
 
-    def step(self):
+    def step(self, action=None):
         """
         Advance the environment by one timestep.
+        If action is None, an action is sampled randomly (for testing/demos);
+        otherwise the given Action is taken (for RL agent integration).
         Returns (obs, reward, done, info), where done detetermines if episode is over,
         and info explains the current state of the agent.
         """
@@ -137,7 +139,9 @@ class GridWorld:
         # Metabolism - how much glucose we lose each step
         self.current_glucose = max(0, self.current_glucose-self.metabolism_rate)
 
-        self.action = Action(self.np_random.choice(list(Action))) # we take a random action
+        if action is None:
+            action = self.np_random.choice(list(Action)) # we take a random action
+        self.action = Action(action)
         if self.action not in DELTAS: # non-movement actions
             grid_item = self.grid[self.agent_pos[0], self.agent_pos[1]]
 
