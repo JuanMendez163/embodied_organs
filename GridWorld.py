@@ -2,7 +2,6 @@
 """
 
 import numpy as np
-import random
 from enum import IntEnum
 
 # ----------------------------------------------------------
@@ -37,13 +36,14 @@ DELTAS = {
 # ----------------------------------------------------------
 
 
-
 class GridWorld:
     """
     """
 
     def __init__(self, grid_size=8, glucose_target=50, glucose_max=100,
-                 n_food=20, max_steps=200):
+                 n_food=20, max_steps=200, seed=None):
+        self.np_random = np.random.default_rng(seed)
+        
         self.grid_size = grid_size
         self.glucose_target = glucose_target # homeostatic glucose target
         self.glucose_max = glucose_max # stomach capacity
@@ -53,21 +53,27 @@ class GridWorld:
         self.metabolism_rate = 5 # glucose lost per step
         self.intake_amount = 10 # glucose gained per eat
 
+        self.n_actions = len(Action)
+
         self.reset()
 
 
-    def reset(self):
+    def reset(self, seed=None):
         """
         Reset to starting state and return initial observation.
+        Only re-seeds the RNG if a seed is explicitly provided; otherwise
+        continues drawing from the existing random stream.
         """
+        if seed is not None:
+            self.np_random = np.random.default_rng(seed)
 
         # Initializing grid and agent position
         self.grid = np.zeros((self.grid_size, self.grid_size), dtype=np.int8) # initialize grid; holds env objects only, not agent
-        self.agent_pos = (random.randint(0, self.grid_size-1), random.randint(0, self.grid_size-1)) # random starting position
+        self.agent_pos = (int(self.np_random.integers(0, self.grid_size)), int(self.np_random.integers(0, self.grid_size))) # random starting position
 
         # Placing food randomly
         empty_cells = [(r, c) for r in range(self.grid_size) for c in range(self.grid_size) if (r, c) != self.agent_pos] # we don't want to place food on top of the agent
-        flat_indices = np.random.choice(len(empty_cells), size=self.n_food, replace=False) # replace=FALSE avoids duplicate placements
+        flat_indices = self.np_random.choice(len(empty_cells), size=self.n_food, replace=False) # replace=FALSE avoids duplicate placements
         self.food_indices = [empty_cells[i] for i in flat_indices]
         for r, c in self.food_indices:
             self.grid[r, c] = Cell.FOOD
@@ -75,7 +81,7 @@ class GridWorld:
         # Initial glucose level
         # TODO: I feel like there is a better way to do this
         while True:
-            self.glucose_start = random.randint(self.glucose_target-self.metabolism_rate*8, self.glucose_target-self.metabolism_rate*2) # start with varying levels of hunger
+            self.glucose_start = int(self.np_random.integers(self.glucose_target-self.metabolism_rate*8, self.glucose_target-self.metabolism_rate*2, endpoint=True)) # start with varying levels of hunger
             if self.glucose_start >= 0:
                 break
 
@@ -130,7 +136,7 @@ class GridWorld:
         # Metabolism - how much glucose we lose each step
         self.current_glucose = max(0, self.current_glucose-self.metabolism_rate)
 
-        self.action = random.choice(list(Action)) # we take a random action
+        self.action = Action(self.np_random.choice(list(Action))) # we take a random action
         if self.action not in DELTAS: # non-movement actions
             grid_item = self.grid[self.agent_pos[0], self.agent_pos[1]]
 
