@@ -103,7 +103,8 @@ class GridWorld:
             self.current_glucose = self.glucose_start
         obs = {
             "agent_pos": self.agent_pos,
-            "glucose_level": self.current_glucose
+            "glucose_level": self.current_glucose,
+            "drive": self._drive()
             #"food_positions": self.food_indices
         }
         return obs
