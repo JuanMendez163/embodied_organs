@@ -1,1 +1,6 @@
 __pycache__
+
+# episode videos
+*.mp4 
+
+.DS_STORE

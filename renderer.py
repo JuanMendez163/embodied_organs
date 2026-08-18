@@ -15,9 +15,9 @@ from GridWorld import Cell, Action
 # Direction (in degrees) the agent-triangle points for each action.
 # EAT keeps the agent's last facing direction.
 _FACING_DEG = {
-    Action.UP: 0,
+    Action.UP: 180,
     Action.RIGHT: -90,
-    Action.DOWN: 180,
+    Action.DOWN: 0,
     Action.LEFT: 90,
 }
 
@@ -91,7 +91,7 @@ class GridWorldRenderer:
         plt.close(fig)
         return frame
 
-    def record_episode(self, policy_fn=None, out_path="episode.mp4", fps=10, max_steps=None):
+    def record_episode(self, policy_fn=None, out_path="episode.mp4", fps=1, max_steps=None):
         """
         Run a full episode from the env's current state, capturing a frame
         per step, and write it to out_path (.mp4 or .gif).
@@ -119,5 +119,5 @@ if __name__ == "__main__":
     from GridWorld import GridWorld
     env = GridWorld(seed=6)
     renderer = GridWorldRenderer(env)
-    path = renderer.record_episode(out_path="episode.mp4", fps=10)
+    path = renderer.record_episode(out_path="episode.mp4", fps=1)
     print(f"Saved episode video to {path}")
