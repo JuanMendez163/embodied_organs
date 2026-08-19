@@ -5,20 +5,25 @@ Decoupled from GridWorld itself so training loops never pay rendering
 cost; only construct a GridWorldRenderer for eval/demo episodes.
 """
 
+import os
+
 import numpy as np
 import matplotlib.pyplot as plt
-from matplotlib.patches import RegularPolygon, Circle
+import matplotlib.image as mpimg
 import imageio.v2 as imageio
 
 from GridWorld import Cell, Action
 
-# Direction (in degrees) the agent-triangle points for each action.
-# EAT keeps the agent's last facing direction.
-_FACING_DEG = {
-    Action.UP: 180,
-    Action.RIGHT: -90,
-    Action.DOWN: 0,
-    Action.LEFT: 90,
+_SPRITE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sprites")
+_FOOD_SPRITE_PATH = os.path.join(_SPRITE_DIR, "food.png")
+_BACKGROUND_SPRITE_PATH = os.path.join(_SPRITE_DIR, "background.png")
+
+# Per-action fish sprite files. EAT keeps the agent's last facing sprite.
+_FISH_SPRITE_PATHS = {
+    Action.UP: os.path.join(_SPRITE_DIR, "fish_up.png"),
+    Action.DOWN: os.path.join(_SPRITE_DIR, "fish_down.png"),
+    Action.LEFT: os.path.join(_SPRITE_DIR, "fish_left.png"),
+    Action.RIGHT: os.path.join(_SPRITE_DIR, "fish_right.png"),
 }
 
 
@@ -33,7 +38,12 @@ class GridWorldRenderer:
         self.cell_px = cell_px
         self.dpi = dpi
         self.figsize = (env.grid_size * cell_px / dpi, env.grid_size * cell_px / dpi)
-        self._facing_deg = 0  # last movement direction, for EAT/idle frames
+        self._fish_imgs = {
+            action: mpimg.imread(path) for action, path in _FISH_SPRITE_PATHS.items()
+        }
+        self._facing_action = Action.DOWN  # last movement direction, for EAT/idle frames
+        self._food_img = mpimg.imread(_FOOD_SPRITE_PATH)
+        self._background_img = mpimg.imread(_BACKGROUND_SPRITE_PATH)
 
     def _draw(self, ax):
         env = self.env
@@ -45,32 +55,44 @@ class GridWorldRenderer:
         ax.invert_yaxis()
         ax.set_xticks(range(n + 1))
         ax.set_yticks(range(n + 1))
-        ax.grid(True, color="#dddddd", linewidth=1)
         ax.set_xticklabels([])
         ax.set_yticklabels([])
         ax.tick_params(length=0)
         for spine in ax.spines.values():
             spine.set_visible(False)
 
-        # Food sprites: small green circles centered in their cell.
+        for r in range(n):
+            for c in range(n):
+                ax.imshow(self._background_img, extent=(c, c + 1, r + 1, r), zorder=0)
+        ax.grid(True, color="#ffffff", linewidth=1, alpha=0.4, zorder=1)
+
+        # Food sprites, centered in their cell.
         food_positions = [
             (r, c) for r in range(n) for c in range(n)
             if env.grid[r, c] == Cell.FOOD
         ]
+        food_size = 0.5
         for r, c in food_positions:
-            ax.add_patch(Circle((c + 0.5, r + 0.5), radius=0.18, color="#4caf50", zorder=2))
+            ax.imshow(
+                self._food_img,
+                extent=(c + 0.5 - food_size / 2, c + 0.5 + food_size / 2,
+                        r + 0.5 + food_size / 2, r + 0.5 - food_size / 2),
+                zorder=2,
+            )
 
-        # Agent sprite: a triangle pointing in its last movement direction.
+        # Agent sprite: fish facing its last movement direction.
         action = getattr(env, "action", None)
-        if action in _FACING_DEG:
-            self._facing_deg = _FACING_DEG[action]
+        if action in self._fish_imgs:
+            self._facing_action = action
         r, c = env.agent_pos
-        agent = RegularPolygon(
-            (c + 0.5, r + 0.5), numVertices=3, radius=0.32,
-            orientation=np.radians(self._facing_deg),
-            color="#1e88e5", zorder=3,
+        fish_size = 0.8
+        img = self._fish_imgs[self._facing_action]
+        ax.imshow(
+            img,
+            extent=(c + 0.5 - fish_size / 2, c + 0.5 + fish_size / 2,
+                    r + 0.5 + fish_size / 2, r + 0.5 - fish_size / 2),
+            zorder=3,
         )
-        ax.add_patch(agent)
 
         glucose = getattr(env, "current_glucose", env.glucose_start)
         action_name = action.name if action is not None else "-"
