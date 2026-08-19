@@ -41,7 +41,8 @@ class GridWorld:
     """
 
     def __init__(self, grid_size=8, glucose_target=50, glucose_max=100,
-                 n_food=20, max_steps=200, metabolism_rate=5, seed=None):
+                 n_food=20, max_steps=200, metabolism_rate=5, intake_amount=10, 
+                 seed=None):
         self.np_random = np.random.default_rng(seed)
         
         self.grid_size = grid_size
@@ -51,7 +52,7 @@ class GridWorld:
         self.max_steps = max_steps
 
         self.metabolism_rate = metabolism_rate # glucose lost per step
-        self.intake_amount = 10 # glucose gained per eat
+        self.intake_amount = intake_amount # glucose gained per eat
 
         self.n_actions = len(Action)
 
