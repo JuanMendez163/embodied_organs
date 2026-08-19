@@ -111,13 +111,14 @@ class GridWorld:
         return obs
 
 
-    def _drive(self, n=2):
+    def _drive(self, n=2, m=1):
         """
         Computes distance from homeostasis.
         Look at drive definition from Gutkin paper.
         n impacts the amount of penalty the further you are from reward.
+        m ?
         """
-        drive = (abs(self.current_glucose - self.glucose_target))**n
+        drive = ((abs(self.current_glucose - self.glucose_target))**n) ** (1/m)
         return drive
 
     def in_bounds(self, pos):
