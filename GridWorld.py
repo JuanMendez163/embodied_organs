@@ -42,7 +42,7 @@ class GridWorld:
 
     def __init__(self, grid_size=8, glucose_target=50, glucose_max=100,
                  n_food=20, max_steps=200, metabolism_rate=5, intake_amount=10, 
-                 seed=None):
+                 drive_n=2, drive_m=1, seed=None):
         self.np_random = np.random.default_rng(seed)
         
         self.grid_size = grid_size
@@ -55,6 +55,9 @@ class GridWorld:
         self.intake_amount = intake_amount # glucose gained per eat
 
         self.n_actions = len(Action)
+
+        self.drive_n = drive_n # exponent for drive calculation
+        self.drive_m = drive_m # exponent for drive calculation
 
         self.reset()
 
@@ -105,13 +108,13 @@ class GridWorld:
         obs = {
             "agent_pos": self.agent_pos,
             "glucose_level": self.current_glucose,
-            "drive": self._drive()
+            "drive": self._drive(self.drive_n, self.drive_m)
             #"food_positions": self.food_indices
         }
         return obs
 
 
-    def _drive(self, n=2, m=1):
+    def _drive(self, n=None, m=None):
         """
         Computes distance from homeostasis.
         Look at drive definition from Gutkin paper.
@@ -136,7 +139,7 @@ class GridWorld:
         Returns (obs, reward, done, info), where done detetermines if episode is over,
         and info explains the current state of the agent.
         """
-        cur_drive = self._drive()
+        cur_drive = self._drive(self.drive_n, self.drive_m)
 
         # Metabolism - how much glucose we lose each step
         self.current_glucose = max(0, self.current_glucose-self.metabolism_rate)
@@ -158,7 +161,7 @@ class GridWorld:
                 self.agent_pos = new_pos
 
 
-        new_drive = self._drive()
+        new_drive = self._drive(self.drive_n, self.drive_m)
         # TODO: consider more complex starvation behavior
         if self.current_glucose == 0:
             self.reward -= 50 # reward steadily draining as you starve
