@@ -83,11 +83,11 @@ class GridWorld:
             self.grid[r, c] = Cell.FOOD
 
         # Initial glucose level
-        # TODO: I feel like there is a better way to do this
-        while True:
-            self.glucose_start = int(self.np_random.integers(self.glucose_target-self.metabolism_rate*8, self.glucose_target-self.metabolism_rate*2, endpoint=True)) # start with varying levels of hunger
-            if self.glucose_start >= 0:
-                break
+        self.glucose_start = self.glucose_target
+        # while True:
+        #     self.glucose_start = int(self.np_random.integers(self.glucose_target-self.metabolism_rate*8, self.glucose_target-self.metabolism_rate*2, endpoint=True)) # start with varying levels of hunger
+        #     if self.glucose_start >= 0:
+        #         break
 
         self.step_count = 0
 
@@ -96,10 +96,10 @@ class GridWorld:
 
     def _get_obs(self):
         """
-        What the agent observes at the current step.
-        The agent observes three things:
+        Environment state observation:
          - current position (x,y)
          - current glucose level
+         - current drive (distance from homeostasis)
          - position of food items (list of (x,y) positions)
         Observation is stored as a dictionary.
         """
@@ -108,8 +108,8 @@ class GridWorld:
         obs = {
             "agent_pos": self.agent_pos,
             "glucose_level": self.current_glucose,
-            "drive": self._drive(self.drive_n, self.drive_m)
-            #"food_positions": self.food_indices
+            "drive": self._drive(self.drive_n, self.drive_m),
+            "food_positions": self.food_indices
         }
         return obs
 
@@ -118,8 +118,7 @@ class GridWorld:
         """
         Computes distance from homeostasis.
         Look at drive definition from Gutkin paper.
-        n impacts the amount of penalty the further you are from reward.
-        m ?
+        n,m have important impact on shape of reward, drive curve
         """
         drive = ((abs(self.current_glucose - self.glucose_target))**n) ** (1/m)
         return drive
@@ -142,26 +141,27 @@ class GridWorld:
         cur_drive = self._drive(self.drive_n, self.drive_m)
 
         # Metabolism - how much glucose we lose each step
-        self.current_glucose = max(0, self.current_glucose-self.metabolism_rate)
+        self.current_glucose = max(0, self.current_glucose-self.metabolism_rate) # min glucose value is 0
 
         if action is None:
             action = self.np_random.choice(list(Action)) # we take a random action
         self.action = Action(action)
-        if self.action not in DELTAS: # non-movement actions
+        if self.action not in DELTAS: # non-movement actions; right now only is EAT
             grid_item = self.grid[self.agent_pos[0], self.agent_pos[1]]
 
             # Eating
             if grid_item == Cell.FOOD: # check if we are standing on food
                 self.current_glucose = min(self.current_glucose+self.intake_amount, self.glucose_max) # eating food; increase glucose (cap at max)
                 self.grid[self.agent_pos[0], self.agent_pos[1]] = Cell.EMPTY # remove food item after eating
-        else:
+                self.food_indices.remove(self.agent_pos) # remove food from list of food positions
+        else: # a movement action
             dr, dc = DELTAS[self.action]
             new_pos = (self.agent_pos[0] + dr, self.agent_pos[1] + dc)
             if self.in_bounds(new_pos): # checking if proposed position is within bounds of grid
                 self.agent_pos = new_pos
 
 
-        new_drive = self._drive(self.drive_n, self.drive_m)
+        new_drive = self._drive(self.drive_n, self.drive_m) # we calculate a new drive after action + env impact (metabolism)
         # TODO: consider more complex starvation behavior
         if self.current_glucose == 0:
             self.reward -= 50 # reward steadily draining as you starve
@@ -172,10 +172,12 @@ class GridWorld:
         if self.step_count == self.max_steps:
             done = True
             info = "Agent reached max steps."
+        elif self.current_glucose == 0:
+            done = True
+            info = "Agent starved to death."
         else:
             done = False
             info = "Agent still exploring."
-            # TODO: the only other info would be "Agent starved to death."
         return (self._get_obs(), self.reward, done, info)
 
 
@@ -206,8 +208,8 @@ if __name__ == "__main__":
     env = GridWorld()
     print("Initial obs:", env._get_obs())
 
-    for t in range(5):
+    for t in range(15):
         print("--------------------------------------")
-        print(env.step()[3])
+        print(env.step()[0])
         env.render()
         print("--------------------------------------")
