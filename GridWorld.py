@@ -3,6 +3,7 @@
 
 import numpy as np
 from enum import IntEnum
+from QLearningAgent import QLearningAgent
 
 # ----------------------------------------------------------
 # Interpretable constants used throughout the environment
@@ -206,10 +207,15 @@ class GridWorld:
    
 if __name__ == "__main__":
     env = GridWorld()
+    agent = QLearningAgent(n_actions=4)
+
     print("Initial obs:", env._get_obs())
 
     for t in range(15):
         print("--------------------------------------")
         print(env.step()[0])
         env.render()
+        obs = env._get_obs()
+        state = agent.discretize_state(obs)
+        print("Discretized state:", state)
         print("--------------------------------------")
