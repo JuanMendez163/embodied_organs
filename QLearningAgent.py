@@ -4,7 +4,7 @@
 import numpy as np
 from collections import defaultdict
 
-#from GridWorld import GridWorld, Action
+from GridWorld import GridWorld
 
 class QLearningAgent:
     """
@@ -12,13 +12,13 @@ class QLearningAgent:
     """
 
     def __init__(self, n_actions, alpha=0.1, gamma=0.95,
-                 epsilon_start=1.0, epsilon_end=0.05, epsilon_decay=0.995,
+                 epsilon_start=1.0, epsilon_min=0.05, epsilon_decay=0.995,
                  seed=None):
         self.n_actions = n_actions
         self.alpha = alpha # learning rate
         self.gamma = gamma # discount factor for future rewards
-        self.epsilon = epsilon_start 
-        self.epsilon_end = epsilon_end # epsilon is for exploration / exploitation
+        self.epsilon = epsilon_start # epsilon is for exploration / exploitation
+        self.epsilon_min = epsilon_min 
         self.epsilon_decay = epsilon_decay
         self.np_random = np.random.default_rng(seed)
 
@@ -79,7 +79,6 @@ class QLearningAgent:
         return tuple(state) # return as a hashable tuple for use as Q-table key
 
 
-
     def choose_action(self, state):
         """
         Chooses an action based on the current state using epsilon-greedy strategy.
@@ -91,12 +90,72 @@ class QLearningAgent:
         if self.np_random.random() < self.epsilon:
             return self.np_random.integers(self.n_actions) # explore: random action
         else: # exploit: choose best action based on Q-table
-            q_values = self.q_table[state]
+            q_values = self.q_table[state] # array of Q-values for state
             max_q = max(q_values)
-            best_actions = [i for i, q in enumerate(q_values) if q == max_q]
+            best_actions = [i for i, q in enumerate(q_values) if q == max_q] # i represents action index
             return self.np_random.choice(best_actions) # break ties randomly
 
 
+    def update(self, state, action, reward, next_state):
+        """
+        Updates the Q-value for the given state-action pair using the Q-learning update rule.
 
-    
+        state: the current state (tuple)
+        action: the action taken (int)
+        reward: the reward received (float)
+        next_state: the next state (tuple)
+        done: whether the episode has ended (bool)
+        """  
+        old_q = self.q_table[state][action]
+        next_q_values = self.q_table[next_state]
+        max_next_q = max(next_q_values)
+        # Q-learning update rule  
+        self.q_table[state][action] = old_q + self.alpha * (reward + self.gamma * max_next_q - old_q)
 
+
+    def decay_epsilon(self):
+        """
+        Decreases the epsilon value for epsilon-greedy strategy to balance exploration and exploitation.
+        """
+        self.epsilon = max(self.epsilon * self.epsilon_decay, self.epsilon_min)
+
+
+
+
+def train(env, agent, n_episodes=1000):
+    """
+    Main training loop for the Q-learning agent.
+
+    env: the environment to interact with
+    agent: the Q-learning agent instance
+    n_episodes: number of episodes to train the agent
+
+    Returns: a list of total rewards received per episode
+    """
+    episode_rewards = []
+    for episode in range(n_episodes):
+        obs = env.reset()
+        state = agent.discretize_state(obs)
+        done = False
+        total_reward = 0
+        while not done:
+            action = agent.choose_action(state) # choose action based off state and epsilon-greedy
+            next_obs, reward, done, info = env.step(action) # perform chosen action
+            next_state = agent.discretize_state(next_obs)
+            agent.update(state, action, reward, next_state) # update Q-table
+            state = next_state
+            total_reward += reward
+        agent.decay_epsilon() # decay epsilon per episode
+        episode_rewards.append(total_reward)
+    return episode_rewards
+
+
+if __name__ == "__main__":
+    env = GridWorld(grid_size=8, glucose_target=50, glucose_max=100,
+                 n_food=20, max_steps=200, metabolism_rate=5, intake_amount=10, 
+                 drive_n=2, drive_m=1, seed=None)
+    agent = QLearningAgent(n_actions=env.n_actions, alpha=0.1, gamma=0.95,
+                 epsilon_start=1.0, epsilon_min=0.05, epsilon_decay=0.9,
+                 seed=None)
+    rewards = train(env, agent, n_episodes=1000)
+    print(rewards)
