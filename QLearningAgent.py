@@ -100,7 +100,7 @@ class QLearningAgent:
             return self.np_random.choice(best_actions) # break ties randomly
 
 
-    def update(self, state, action, reward, next_state, next_valid_actions=None):
+    def update(self, state, action, reward, next_state, next_valid_actions=None, terminal=False):
         """
         Updates the Q-value for the given state-action pair using the Q-learning update rule.
 
@@ -111,13 +111,21 @@ class QLearningAgent:
         next_valid_actions: actions allowed in next_state; None means all actions.
             Masking matters: a disallowed action's Q-value is never updated and stays 0,
             which would otherwise win the max over the (mostly negative) real values.
-        """  
+        terminal: True if next_state is terminal (agent starved), so it has no future value.
+            Leave False when the episode was only cut off at max_steps: the state doesn't
+            include time, so the agent should still value what would have come next.
+            Matters because glucose is binned: the starved state (glucose 0) shares its key
+            with living states (glucose 1-9), whose learned Q-values would otherwise leak in.
+        """
         old_q = self.q_table[state][action]
-        next_q_values = self.q_table[next_state]
-        if next_valid_actions is None: # None is the default all actions are valid
-            next_valid_actions = range(self.n_actions)
-        max_next_q = max(next_q_values[int(a)] for a in next_valid_actions) # you need to do just over valid actions, otherwise the 0 Q-values (invalid) will win
-        # Q-learning update rule  
+        if terminal:
+            max_next_q = 0.0 # no future after starving
+        else:
+            next_q_values = self.q_table[next_state]
+            if next_valid_actions is None: # None is the default all actions are valid
+                next_valid_actions = range(self.n_actions)
+            max_next_q = max(next_q_values[int(a)] for a in next_valid_actions) # you need to do just over valid actions, otherwise the 0 Q-values (invalid) will win
+        # Q-learning update rule
         self.q_table[state][action] = old_q + self.alpha * (reward + self.gamma * max_next_q - old_q)
 
 
@@ -150,7 +158,8 @@ def train(env, agent, n_episodes=1000):
             action = agent.choose_action(state, obs["valid_actions"]) # choose action based off state and epsilon-greedy
             next_obs, reward, done, info = env.step(action) # perform chosen action
             next_state = agent.discretize_state(next_obs)
-            agent.update(state, action, reward, next_state, next_obs["valid_actions"]) # update Q-table
+            starved = next_obs["glucose_level"] == 0 # terminal; ending at max_steps is not
+            agent.update(state, action, reward, next_state, next_obs["valid_actions"], terminal=starved) # update Q-table
             state = next_state
             obs = next_obs
             #print(state)

@@ -178,11 +178,9 @@ class GridWorld:
 
 
         new_drive = self._drive(self.drive_n, self.drive_m) # we calculate a new drive after action + env impact (metabolism)
-        # TODO: consider more complex starvation behavior
-        if self.current_glucose == 0:
-            self.reward -= 50 # reward steadily draining as you starve
-        else:
-            self.reward = cur_drive - new_drive # as defined in Gutkin paper
+        # no separate starvation penalty: glucose 0 is maximal drive, so starving already gives the
+        # most negative reward, and the episode ends there (agent treats it as terminal)
+        self.reward = cur_drive - new_drive # as defined in Gutkin paper
 
         self.step_count += 1
         if self.step_count == self.max_steps:
