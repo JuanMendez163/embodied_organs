@@ -79,24 +79,28 @@ class QLearningAgent:
         return tuple(state) # return as a hashable tuple for use as Q-table key
 
 
-    def choose_action(self, state):
+    def choose_action(self, state, valid_actions=None):
         """
         Chooses an action based on the current state using epsilon-greedy strategy.
 
         state: the discretized state (tuple)
+        valid_actions: actions allowed in this state (obs["valid_actions"]); None means all actions
 
         Returns: the chosen action (int)
         """
+        if valid_actions is None:
+            valid_actions = range(self.n_actions)
+        valid_actions = [int(a) for a in valid_actions]
         if self.np_random.random() < self.epsilon:
-            return self.np_random.integers(self.n_actions) # explore: random action
-        else: # exploit: choose best action based on Q-table
+            return self.np_random.choice(valid_actions) # explore: random valid action
+        else: # exploit: choose best valid action based on Q-table
             q_values = self.q_table[state] # array of Q-values for state
-            max_q = max(q_values)
-            best_actions = [i for i, q in enumerate(q_values) if q == max_q] # i represents action index
+            max_q = max(q_values[a] for a in valid_actions)
+            best_actions = [a for a in valid_actions if q_values[a] == max_q]
             return self.np_random.choice(best_actions) # break ties randomly
 
 
-    def update(self, state, action, reward, next_state):
+    def update(self, state, action, reward, next_state, next_valid_actions=None):
         """
         Updates the Q-value for the given state-action pair using the Q-learning update rule.
 
@@ -104,11 +108,15 @@ class QLearningAgent:
         action: the action taken (int)
         reward: the reward received (float)
         next_state: the next state (tuple)
-        done: whether the episode has ended (bool)
+        next_valid_actions: actions allowed in next_state; None means all actions.
+            Masking matters: a disallowed action's Q-value is never updated and stays 0,
+            which would otherwise win the max over the (mostly negative) real values.
         """  
         old_q = self.q_table[state][action]
         next_q_values = self.q_table[next_state]
-        max_next_q = max(next_q_values)
+        if next_valid_actions is None: # None is the default all actions are valid
+            next_valid_actions = range(self.n_actions)
+        max_next_q = max(next_q_values[int(a)] for a in next_valid_actions) # you need to do just over valid actions, otherwise the 0 Q-values (invalid) will win
         # Q-learning update rule  
         self.q_table[state][action] = old_q + self.alpha * (reward + self.gamma * max_next_q - old_q)
 
@@ -139,11 +147,12 @@ def train(env, agent, n_episodes=1000):
         done = False
         total_reward = 0
         while not done:
-            action = agent.choose_action(state) # choose action based off state and epsilon-greedy
+            action = agent.choose_action(state, obs["valid_actions"]) # choose action based off state and epsilon-greedy
             next_obs, reward, done, info = env.step(action) # perform chosen action
             next_state = agent.discretize_state(next_obs)
-            agent.update(state, action, reward, next_state) # update Q-table
+            agent.update(state, action, reward, next_state, next_obs["valid_actions"]) # update Q-table
             state = next_state
+            obs = next_obs
             #print(state)
             #print(f"Glucose Level: {next_obs['glucose_level']}")
             #print(f"Next Obs Drive: {next_obs['drive']}")
@@ -156,11 +165,6 @@ def train(env, agent, n_episodes=1000):
 
 
 if __name__ == "__main__":
-    # debugging: first put code into Claude to see suggestions for debugging
-    # also want to have some sort of renderer perhaps so I can get visual intuition of what it's doing
-    # first want to see if I can get learning behavior in this env; then introduce further complexities to env
-    # consider glucose bin size for debugging
-
     env = GridWorld(grid_size=6, glucose_target=50, glucose_max=100,
                  n_food=20, max_steps=200, metabolism_rate=5, intake_amount=10, 
                  drive_n=2, drive_m=1, seed=None)

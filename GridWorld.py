@@ -104,6 +104,7 @@ class GridWorld:
          - current glucose level
          - current drive (distance from homeostasis)
          - position of food items (list of (x,y) positions)
+         - actions allowed from the current position (list of Action)
         Observation is stored as a dictionary.
         """
         if self.step_count == 0:
@@ -112,9 +113,19 @@ class GridWorld:
             "agent_pos": self.agent_pos,
             "glucose_level": self.current_glucose,
             "drive": self._drive(self.drive_n, self.drive_m),
-            "food_positions": self.food_indices
+            "food_positions": self.food_indices,
+            "valid_actions": self.valid_actions()
         }
         return obs
+
+
+    def valid_actions(self):
+        """
+        Actions the agent may take from its current position.
+        EAT is only allowed when standing on a food tile; all other actions are always allowed.
+        """
+        on_food = self.grid[self.agent_pos[0], self.agent_pos[1]] == Cell.FOOD
+        return [a for a in Action if a != Action.EAT or on_food]
 
 
     def _drive(self, n=None, m=None):
@@ -136,27 +147,29 @@ class GridWorld:
     def step(self, action=None):
         """
         Advance the environment by one timestep.
-        If action is None, an action is sampled randomly (for testing/demos);
+        If action is None, a valid action is sampled randomly (for testing/demos);
         otherwise the given Action is taken (for RL agent integration).
+        Raises ValueError if the action is not in valid_actions() (EAT off a food tile).
         Returns (obs, reward, done, info), where done detetermines if episode is over,
         and info explains the current state of the agent.
         """
+        valid = self.valid_actions()
+        if action is None:
+            action = self.np_random.choice(valid) # we take a random valid action
+        if Action(action) not in valid: # checked before any state changes
+            raise ValueError(f"{Action(action).name} is not allowed at {self.agent_pos}; valid actions: {[a.name for a in valid]}")
+        self.action = Action(action)
+
         cur_drive = self._drive(self.drive_n, self.drive_m)
 
         # Metabolism - how much glucose we lose each step
         self.current_glucose = max(0, self.current_glucose-self.metabolism_rate) # min glucose value is 0
 
-        if action is None:
-            action = self.np_random.choice(list(Action)) # we take a random action
-        self.action = Action(action)
         if self.action not in DELTAS: # non-movement actions; right now only is EAT
-            grid_item = self.grid[self.agent_pos[0], self.agent_pos[1]]
-
-            # Eating
-            if grid_item == Cell.FOOD: # check if we are standing on food
-                self.current_glucose = min(self.current_glucose+self.intake_amount, self.glucose_max) # eating food; increase glucose (cap at max)
-                self.grid[self.agent_pos[0], self.agent_pos[1]] = Cell.EMPTY # remove food item after eating
-                self.food_indices.remove(self.agent_pos) # remove food from list of food positions
+            # Eating; valid_actions() guarantees we are standing on food
+            self.current_glucose = min(self.current_glucose+self.intake_amount, self.glucose_max) # eating food; increase glucose (cap at max)
+            self.grid[self.agent_pos[0], self.agent_pos[1]] = Cell.EMPTY # remove food item after eating
+            self.food_indices.remove(self.agent_pos) # remove food from list of food positions
         else: # a movement action; can be idle or directional
             dr, dc = DELTAS[self.action]
             new_pos = (self.agent_pos[0] + dr, self.agent_pos[1] + dc)
