@@ -132,7 +132,7 @@ def train(env, agent, n_episodes=1000):
 
     Returns: a list of total rewards received per episode
     """
-    episode_rewards = []
+    episode_total_rewards = []
     for episode in range(n_episodes):
         obs = env.reset()
         state = agent.discretize_state(obs)
@@ -144,18 +144,28 @@ def train(env, agent, n_episodes=1000):
             next_state = agent.discretize_state(next_obs)
             agent.update(state, action, reward, next_state) # update Q-table
             state = next_state
+            #print(state)
+            #print(f"Glucose Level: {next_obs['glucose_level']}")
+            #print(f"Next Obs Drive: {next_obs['drive']}")
+            #print(f"Reward: {reward}")
             total_reward += reward
+            #print(f"Total Reward: {total_reward}")
         agent.decay_epsilon() # decay epsilon per episode
-        episode_rewards.append(total_reward)
-    return episode_rewards
+        episode_total_rewards.append(total_reward)
+    return episode_total_rewards
 
 
 if __name__ == "__main__":
-    env = GridWorld(grid_size=8, glucose_target=50, glucose_max=100,
+    # debugging: first put code into Claude to see suggestions for debugging
+    # also want to have some sort of renderer perhaps so I can get visual intuition of what it's doing
+    # first want to see if I can get learning behavior in this env; then introduce further complexities to env
+    # consider glucose bin size for debugging
+
+    env = GridWorld(grid_size=6, glucose_target=50, glucose_max=100,
                  n_food=20, max_steps=200, metabolism_rate=5, intake_amount=10, 
                  drive_n=2, drive_m=1, seed=None)
-    agent = QLearningAgent(n_actions=env.n_actions, alpha=0.1, gamma=0.95,
-                 epsilon_start=1.0, epsilon_min=0.05, epsilon_decay=0.9,
+    agent = QLearningAgent(n_actions=env.n_actions, alpha=0.3, gamma=0.95,
+                 epsilon_start=1.0, epsilon_min=0.05, epsilon_decay=0.7,
                  seed=None)
-    rewards = train(env, agent, n_episodes=1000)
+    rewards = train(env, agent, n_episodes=5000)
     print(rewards)
