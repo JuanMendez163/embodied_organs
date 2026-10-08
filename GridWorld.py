@@ -25,13 +25,15 @@ class Action(IntEnum):
     DOWN = 1
     LEFT = 2
     RIGHT = 3
-    EAT = 4
+    IDLE = 4
+    EAT = 5
 
 DELTAS = {
     Action.UP:      (-1, 0), # negative means moving up because you are reducing index
     Action.DOWN:    (1, 0),
     Action.LEFT:    (0, -1),
-    Action.RIGHT:   (0, 1)
+    Action.RIGHT:   (0, 1),
+    Action.IDLE:    (0, 0) # no movement
 }
 
 # ----------------------------------------------------------
@@ -155,7 +157,7 @@ class GridWorld:
                 self.current_glucose = min(self.current_glucose+self.intake_amount, self.glucose_max) # eating food; increase glucose (cap at max)
                 self.grid[self.agent_pos[0], self.agent_pos[1]] = Cell.EMPTY # remove food item after eating
                 self.food_indices.remove(self.agent_pos) # remove food from list of food positions
-        else: # a movement action
+        else: # a movement action; can be idle or directional
             dr, dc = DELTAS[self.action]
             new_pos = (self.agent_pos[0] + dr, self.agent_pos[1] + dc)
             if self.in_bounds(new_pos): # checking if proposed position is within bounds of grid
