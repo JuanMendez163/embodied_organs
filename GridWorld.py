@@ -45,7 +45,7 @@ class GridWorld:
 
     def __init__(self, grid_size=8, glucose_target=50, glucose_max=100,
                  n_food=20, max_steps=200, metabolism_rate=5, intake_amount=10, 
-                 drive_n=2, drive_m=1, seed=None):
+                 drive_n=2, drive_m=1, move_metabolism_rate=None, seed=None):
         self.np_random = np.random.default_rng(seed)
         
         self.grid_size = grid_size
@@ -54,7 +54,9 @@ class GridWorld:
         self.n_food = n_food # amount of food in environment
         self.max_steps = max_steps
 
-        self.metabolism_rate = metabolism_rate # glucose lost per step
+        self.metabolism_rate = metabolism_rate # glucose lost per IDLE or EAT step
+        # glucose lost per movement step (UP/DOWN/LEFT/RIGHT, even into a wall); None = same as metabolism_rate
+        self.move_metabolism_rate = metabolism_rate if move_metabolism_rate is None else move_metabolism_rate
         self.intake_amount = intake_amount # glucose gained per eat
 
         self.n_actions = len(Action)
@@ -137,6 +139,15 @@ class GridWorld:
         drive = ((abs(self.current_glucose - self.glucose_target))**n) ** (1/m)
         return drive
 
+    def step_metabolism(self, action):
+        """
+        Glucose lost on a step taking this action: move_metabolism_rate for a movement action
+        (charged even if the move is blocked by a wall), metabolism_rate for IDLE and EAT.
+        """
+        if Action(action) in (Action.IDLE, Action.EAT):
+            return self.metabolism_rate
+        return self.move_metabolism_rate
+
     def in_bounds(self, pos):
         """
         Checks if the position pos is within the bounds of the grid.
@@ -162,8 +173,8 @@ class GridWorld:
 
         cur_drive = self._drive(self.drive_n, self.drive_m)
 
-        # Metabolism - how much glucose we lose each step
-        self.current_glucose = max(0, self.current_glucose-self.metabolism_rate) # min glucose value is 0
+        # Metabolism - how much glucose we lose each step; moving costs move_metabolism_rate, IDLE/EAT cost metabolism_rate
+        self.current_glucose = max(0, self.current_glucose-self.step_metabolism(self.action)) # min glucose value is 0
 
         if self.action not in DELTAS: # non-movement actions; right now only is EAT
             # Eating; valid_actions() guarantees we are standing on food
