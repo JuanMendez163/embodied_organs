@@ -473,6 +473,14 @@ def plot_episode_maps(trajs, env_params, titles=None, mode="path", jitter=0.12, 
 # Plots comparing agents across environments
 # ----------------------------------------------------------
 
+# one number per evaluation episode; fn(trajectory, env params)
+PER_EPISODE_METRICS = {
+    "steps survived": lambda t, p: len(t["reward"]),
+    "food eaten": lambda t, p: action_counts(t)["eat"],
+    "mean |glucose - target|": lambda t, p: np.abs(t["glucose"] - p["glucose_target"]).mean(),
+}
+
+
 def plot_condition_outcomes(evals, eval_env_params, agent_colors, fname=None):
     """
     Box plots of per-episode outcomes for every (agent, eval env) condition,
@@ -482,17 +490,12 @@ def plot_condition_outcomes(evals, eval_env_params, agent_colors, fname=None):
     eval_env_params: dict of {env label: GridWorld parameters}
     agent_colors: dict of {agent label: color}; also sets the agent order
     """
-    per_episode_metrics = {
-        "steps survived": lambda t, p: len(t["reward"]),
-        "food eaten": lambda t, p: action_counts(t)["eat"],
-        "mean |glucose - target|": lambda t, p: np.abs(t["glucose"] - p["glucose_target"]).mean(),
-    }
     env_labels = list(eval_env_params)
     n_agents = len(agent_colors)
     width = 0.7 / n_agents
 
-    fig, axes = plt.subplots(1, len(per_episode_metrics), figsize=(4.2 * len(per_episode_metrics), 4))
-    for ax, (metric, fn) in zip(axes, per_episode_metrics.items()):
+    fig, axes = plt.subplots(1, len(PER_EPISODE_METRICS), figsize=(4.2 * len(PER_EPISODE_METRICS), 4))
+    for ax, (metric, fn) in zip(axes, PER_EPISODE_METRICS.items()):
         for j, (a_label, color) in enumerate(agent_colors.items()):
             data = [[fn(t, eval_env_params[e_label]) for t in evals[(a_label, e_label)]]
                     for e_label in env_labels]
@@ -516,7 +519,22 @@ def plot_condition_outcomes(evals, eval_env_params, agent_colors, fname=None):
     plt.show()
 
 
-def plot_mean_glucose(evals, eval_env_params, agent_colors, min_running=0.1, fname=None):
+def running_mean_glucose(trajs, min_running=0.1):
+    """
+    Mean glucose at each step over the episodes still running at that step;
+    NaN once fewer than min_running of the episodes are still running.
+    """
+    max_len = max(len(t["glucose"]) for t in trajs)
+    padded = np.full((len(trajs), max_len), np.nan) # NaN after an episode ends
+    for i, t in enumerate(trajs):
+        padded[i, :len(t["glucose"])] = t["glucose"]
+    running = np.mean(~np.isnan(padded), axis=0)
+    mean_glucose = np.nanmean(padded, axis=0)
+    mean_glucose[running < min_running] = np.nan
+    return mean_glucose
+
+
+def plot_mean_glucose(evals,eval_env_params, agent_colors, min_running=0.1, fname=None):
     """
     Mean glucose per step over the episodes still running at that step; one panel per eval env,
     one line per agent. Lines stop once fewer than min_running of the episodes are still running.
@@ -526,14 +544,7 @@ def plot_mean_glucose(evals, eval_env_params, agent_colors, min_running=0.1, fna
     axes = axes[0]
     for ax, (e_label, params) in zip(axes, eval_env_params.items()):
         for a_label, color in agent_colors.items():
-            trajs = evals[(a_label, e_label)]
-            max_len = max(len(t["glucose"]) for t in trajs)
-            padded = np.full((len(trajs), max_len), np.nan) # NaN after an episode ends
-            for i, t in enumerate(trajs):
-                padded[i, :len(t["glucose"])] = t["glucose"]
-            running = np.mean(~np.isnan(padded), axis=0)
-            mean_glucose = np.nanmean(padded, axis=0)
-            mean_glucose[running < min_running] = np.nan
+            mean_glucose = running_mean_glucose(evals[(a_label, e_label)], min_running)
             ax.plot(mean_glucose, color=color, linewidth=2, label=a_label)
         ax.axhline(params["glucose_target"], color="gray", linestyle="--", linewidth=1)
         ax.set_ylim(0, params["glucose_max"])
@@ -546,3 +557,364 @@ def plot_mean_glucose(evals, eval_env_params, agent_colors, min_running=0.1, fna
     if fname:
         plt.savefig(fname, dpi=300)
     plt.show()
+
+
+# ----------------------------------------------------------
+# Variability across agents
+# ----------------------------------------------------------
+# These take several independently trained agents per condition (one per seed), so the spread
+# they show is between agents, not just between episodes of a single agent.
+
+def train_agents(env_params, agent_params, n_episodes, seeds):
+    """
+    Trains one fresh agent per seed with train_agent (no recorded trajectories, to save memory).
+    Returns (agents, histories), both lists in seed order.
+    """
+    agents, histories = [], []
+    for seed in seeds:
+        agent, history = train_agent(env_params, agent_params, n_episodes, seed=seed)
+        agents.append(agent)
+        histories.append(history)
+    return agents, histories
+
+
+def evaluate_agents(agents, env_params, n_episodes, seed):
+    """
+    evaluate() for every agent with the same seed, so all agents face the same food layouts.
+    Returns a list (one entry per agent) of lists of trajectories.
+    """
+    return [evaluate(agent, env_params, n_episodes=n_episodes, seed=seed) for agent in agents]
+
+
+def episode_metric_table(agent_evals, env_params):
+    """
+    {metric: array of shape (n_agents, n_episodes)} for every metric in PER_EPISODE_METRICS.
+    agent_evals: list over agents of lists of trajectories (from evaluate_agents)
+    """
+    return {metric: np.array([[fn(t, env_params) for t in trajs] for trajs in agent_evals])
+            for metric, fn in PER_EPISODE_METRICS.items()}
+
+
+def variance_partition(agent_evals, env_params):
+    """
+    Share of each metric's per-episode variance that comes from differences between agents:
+    var(agent means) / (var(agent means) + mean within-agent var). With the same number of episodes
+    per agent this is the law of total variance, so the two parts add up to the total variance.
+    Noise in each agent's mean inflates the between-agent part by about (within var) / n_episodes,
+    which is small for a few hundred episodes. NaN if the metric doesn't vary at all.
+    """
+    shares = {}
+    for metric, values in episode_metric_table(agent_evals, env_params).items():
+        between = values.mean(axis=1).var()
+        within = values.var(axis=1).mean()
+        total = between + within
+        shares[metric] = between / total if total > 0 else np.nan
+    return shares
+
+
+# per-episode training curves; fn(history) -> one value per episode
+LEARNING_CURVES = {
+    "steps survived": lambda h: h["length"],
+    "food left at end": lambda h: h["food_left"],
+    "share of steps: eat": lambda h: h["action_counts"]["eat"] / h["length"],
+    "share of steps: idle": lambda h: h["action_counts"]["idle"] / h["length"],
+}
+
+
+def plot_learning_curves_across_agents(groups, colors, window, fname=None):
+    """
+    Moving-average training curves: one thin line per agent, plus the mean across agents (bold)
+    with a band of ± 1 SD across agents (not across episodes).
+
+    groups: dict of {group label: list of histories}
+    colors: dict of {group label: color}
+    """
+    fig, axes = plt.subplots(2, 2, figsize=(12, 7), sharex=True)
+    for ax, (metric, fn) in zip(axes.flat, LEARNING_CURVES.items()):
+        for label, histories in groups.items():
+            curves = np.array([moving_average(fn(h), window) for h in histories]) # (agents, episodes)
+            x = np.arange(window - 1, window - 1 + curves.shape[1])
+            for curve in curves:
+                ax.plot(x, curve, color=colors[label], linewidth=0.6, alpha=0.35)
+            mean, sd = curves.mean(axis=0), curves.std(axis=0)
+            ax.fill_between(x, mean - sd, mean + sd, color=colors[label], alpha=0.12, linewidth=0)
+            ax.plot(x, mean, color=colors[label], linewidth=2,
+                    label=f"{label} (mean of {len(histories)} agents ± 1 SD)")
+        ax.set_title(metric)
+        ax.spines[["top", "right"]].set_visible(False)
+    for ax in axes[1]:
+        ax.set_xlabel("episode")
+    for ax in axes[:, 0]:
+        ax.set_ylabel(f"{window}-episode moving average")
+    axes[0, 0].legend(frameon=False)
+    plt.tight_layout()
+    if fname:
+        plt.savefig(fname, dpi=300)
+    plt.show()
+
+
+def plot_per_agent_outcomes(agent_evals, env_params, color, title, agent_labels=None, fname=None):
+    """
+    One box per agent: its distribution over evaluation episodes. Agents are sorted by their mean
+    separately in each panel (tick labels say which agent is which); diamond = agent mean,
+    dashed line = mean over all agents. Panel titles give the between-agent share of variance.
+
+    agent_evals: list over agents of lists of trajectories (from evaluate_agents)
+    agent_labels: tick label per agent (e.g. its seed); defaults to 0..n_agents-1
+    """
+    table = episode_metric_table(agent_evals, env_params)
+    shares = variance_partition(agent_evals, env_params)
+    n = len(agent_evals)
+    agent_labels = list(agent_labels) if agent_labels is not None else list(range(n))
+
+    fig, axes = plt.subplots(1, len(table), figsize=((0.4 * n + 1.8) * len(table), 4.2))
+    for ax, (metric, values) in zip(axes, table.items()):
+        order = np.argsort(values.mean(axis=1))
+        ax.boxplot([values[i] for i in order], positions=np.arange(n), widths=0.6, patch_artist=True,
+                   boxprops=dict(facecolor=color, edgecolor=color, alpha=0.35),
+                   medianprops=dict(color=color, linewidth=2),
+                   whiskerprops=dict(color=color), capprops=dict(color=color),
+                   flierprops=dict(marker="o", markersize=3, markerfacecolor=color,
+                                   markeredgecolor="none", alpha=0.5))
+        ax.scatter(np.arange(n), values[order].mean(axis=1), marker="D", s=24, color="black", zorder=3)
+        ax.axhline(values.mean(), color="gray", linestyle="--", linewidth=1)
+        ax.set_xticks(np.arange(n))
+        ax.set_xticklabels([agent_labels[i] for i in order])
+        share = "n/a" if np.isnan(shares[metric]) else f"{shares[metric]:.0%}"
+        ax.set_title(f"{metric}\nbetween-agent share of variance: {share}", fontsize=10)
+        ax.spines[["top", "right"]].set_visible(False)
+    axes[0].set_xlabel("agent (sorted by mean)")
+    fig.suptitle(title)
+    plt.tight_layout()
+    if fname:
+        plt.savefig(fname, dpi=300)
+    plt.show()
+
+
+def plot_variance_partition(partitions, colors, fname=None):
+    """
+    One panel per metric, one bar per condition: share of the per-episode variance that comes
+    from differences between agents (see variance_partition).
+
+    partitions: dict of {condition label: dict from variance_partition}
+    colors: dict of {condition label: color}
+    """
+    conditions = list(partitions)
+    y = np.arange(len(conditions))
+    fig, axes = plt.subplots(1, len(PER_EPISODE_METRICS), figsize=(4.2 * len(PER_EPISODE_METRICS),
+                             0.55 * len(conditions) + 1.6), sharey=True)
+    for ax, metric in zip(axes, PER_EPISODE_METRICS):
+        shares = np.array([partitions[c][metric] for c in conditions])
+        ax.barh(y, np.nan_to_num(shares), height=0.6, color=[colors[c] for c in conditions])
+        for yi, share in zip(y, shares):
+            ax.text(0.02 if np.isnan(share) else share + 0.02, yi, "n/a" if np.isnan(share) else f"{share:.0%}",
+                    va="center", fontsize=9)
+        ax.set_xlim(0, 1)
+        ax.set_title(metric)
+        ax.spines[["top", "right"]].set_visible(False)
+    axes[0].set_yticks(y)
+    axes[0].set_yticklabels(conditions)
+    axes[0].invert_yaxis() # first condition on top (shared y, so this flips every panel)
+    axes[0].set_xlabel("between-agent share of variance")
+    plt.tight_layout()
+    if fname:
+        plt.savefig(fname, dpi=300)
+    plt.show()
+
+
+def plot_transfer_slopes(evals, eval_env_params, agent_colors, fname=None):
+    """
+    Each thin line is one agent: its mean over evaluation episodes in each eval env, colored by the
+    environment it was trained in. Bold line = mean across that training condition's agents.
+    Training conditions are nudged apart horizontally so their lines don't hide each other.
+
+    evals: dict of {(training label, env label): list over agents of lists of trajectories}
+    eval_env_params: dict of {env label: GridWorld parameters}
+    agent_colors: dict of {training label: color}; also sets the order
+    """
+    env_labels = list(eval_env_params)
+    n_groups = len(agent_colors)
+    fig, axes = plt.subplots(1, len(PER_EPISODE_METRICS), figsize=(4.2 * len(PER_EPISODE_METRICS), 4))
+    for ax, (metric, fn) in zip(axes, PER_EPISODE_METRICS.items()):
+        for j, (a_label, color) in enumerate(agent_colors.items()):
+            # (n_agents, n_envs): each agent's mean in each eval env
+            means = np.array([[np.mean([fn(t, eval_env_params[e]) for t in trajs])
+                               for trajs in evals[(a_label, e)]] for e in env_labels]).T
+            x = np.arange(len(env_labels)) + (j - (n_groups - 1) / 2) * 0.08
+            for row in means:
+                ax.plot(x, row, color=color, linewidth=0.8, alpha=0.45, marker="o", markersize=3)
+            ax.plot(x, means.mean(axis=0), color=color, linewidth=2.5, marker="o", markersize=8,
+                    label=f"{a_label} (mean of {len(means)})")
+        ax.set_xticks(range(len(env_labels)))
+        ax.set_xticklabels([f"{e} env\n(n_food={eval_env_params[e]['n_food']})" for e in env_labels])
+        ax.set_xlim(-0.4, len(env_labels) - 0.6)
+        ax.set_title(metric)
+        ax.spines[["top", "right"]].set_visible(False)
+    axes[0].set_xlabel("evaluation environment")
+    axes[0].set_ylabel("agent mean over eval episodes")
+    handles, labels = axes[0].get_legend_handles_labels()
+    fig.legend(handles, labels, loc="lower center", ncol=n_groups, frameon=False)
+    plt.tight_layout(rect=(0, 0.08, 1, 1))
+    if fname:
+        plt.savefig(fname, dpi=300)
+    plt.show()
+
+
+def plot_mean_glucose_across_agents(evals, eval_env_params, agent_colors, min_running=0.1, fname=None):
+    """
+    Like plot_mean_glucose, but with one thin line per agent (its mean over its own eval episodes)
+    and a bold line pooling every agent's episodes. One panel per eval env.
+
+    evals: dict of {(training label, env label): list over agents of lists of trajectories}
+    """
+    fig, axes = plt.subplots(1, len(eval_env_params), figsize=(6 * len(eval_env_params), 4),
+                             sharey=True, squeeze=False)
+    axes = axes[0]
+    for ax, (e_label, params) in zip(axes, eval_env_params.items()):
+        for a_label, color in agent_colors.items():
+            agent_evals = evals[(a_label, e_label)]
+            for trajs in agent_evals:
+                ax.plot(running_mean_glucose(trajs, min_running), color=color, linewidth=0.7, alpha=0.4)
+            pooled = [t for trajs in agent_evals for t in trajs]
+            ax.plot(running_mean_glucose(pooled, min_running), color=color, linewidth=2.5,
+                    label=f"{a_label} (all {len(agent_evals)} agents)")
+        ax.axhline(params["glucose_target"], color="gray", linestyle="--", linewidth=1)
+        ax.set_ylim(0, params["glucose_max"])
+        ax.set_title(f"{e_label} env (n_food={params['n_food']})")
+        ax.set_xlabel("step")
+        ax.spines[["top", "right"]].set_visible(False)
+    axes[0].set_ylabel("mean glucose (running episodes)")
+    axes[0].legend(frameon=False)
+    plt.tight_layout()
+    if fname:
+        plt.savefig(fname, dpi=300)
+    plt.show()
+
+
+def eat_advantage_by_glucose(agent, glucose_max):
+    """
+    For the state of standing on food, (0, 'O', glucose bin), at each glucose bin:
+    Q(EAT) minus the best other action's Q-value. > 0 means the greedy policy eats at that glucose.
+    NaN for bins the agent has no trained Q-values for.
+    Returns (bins, advantages); bin b covers glucose 10b to 10b + 9 (see discretize_state).
+    """
+    bins = np.arange(glucose_max // 10 + 1)
+    advantages = np.full(len(bins), np.nan)
+    for b in bins:
+        state = (0, "O", int(b))
+        if is_trained(agent, state): # checks membership first, so it doesn't add the state to the defaultdict
+            q = agent.q_table[state]
+            advantages[b] = q[Action.EAT] - max(q[a] for a in Action if a != Action.EAT)
+    return bins, advantages
+
+
+def plot_eat_policy(groups, colors, glucose_target, glucose_max, fname=None):
+    """
+    How each agent's greedy policy decides to eat when standing on food, as a function of glucose.
+    Left: Q(EAT) - best other Q, one line per agent (> 0 = eats). Right: share of agents whose greedy
+    action is EAT, among agents with trained Q-values in that bin. Dashed line = glucose target.
+
+    groups: dict of {group label: list of agents}
+    colors: dict of {group label: color}
+    """
+    fig, axes = plt.subplots(1, 2, figsize=(12, 4))
+    for label, agents in groups.items():
+        advantages = []
+        for agent in agents:
+            bins, adv = eat_advantage_by_glucose(agent, glucose_max)
+            advantages.append(adv)
+            axes[0].plot(bins * 10, adv, color=colors[label], linewidth=0.8, alpha=0.5, marker="o", markersize=3)
+        advantages = np.array(advantages)
+        trained = ~np.isnan(advantages)
+        n_trained = trained.sum(axis=0)
+        eats = np.where(trained, advantages > 0, False).sum(axis=0)
+        share = np.where(n_trained > 0, eats / np.maximum(n_trained, 1), np.nan)
+        axes[1].plot(bins * 10, share, color=colors[label], linewidth=2, marker="o", markersize=7,
+                     label=f"{label} ({len(agents)} agents)")
+
+    axes[0].axhline(0, color="gray", linewidth=0.8)
+    axes[0].set_ylabel("Q(EAT) - best other Q")
+    axes[0].set_title("Eating preference on a food tile, per agent")
+    axes[1].set_ylim(-0.03, 1.03)
+    axes[1].set_ylabel("share of agents that eat")
+    axes[1].set_title("Agents whose greedy action is EAT")
+    axes[1].legend(frameon=False)
+    for ax in axes:
+        ax.axvline(glucose_target, color="gray", linestyle="--", linewidth=1)
+        ax.set_xlabel("glucose (start of 10-unit bin)")
+        ax.spines[["top", "right"]].set_visible(False)
+    plt.tight_layout()
+    if fname:
+        plt.savefig(fname, dpi=300)
+    plt.show()
+
+
+def greedy_action(agent, state):
+    """
+    Highest-Q action allowed in this state (EAT only when standing on food); ties go to the lowest action.
+    """
+    q = agent.q_table[state]
+    valid = [a for a in Action if a != Action.EAT or state[1] == "O"]
+    return max(valid, key=lambda a: q[a])
+
+
+def policy_agreement(agents):
+    """
+    (agreement, n_shared): n_agents x n_agents matrices. agreement[i, j] is the share of states with
+    trained Q-values in both agents i and j where their greedy actions match; n_shared[i, j] is the
+    number of those states.
+    """
+    trained = [{s for s in agent.q_table if is_trained(agent, s)} for agent in agents]
+    policies = [{s: greedy_action(agent, s) for s in states} for agent, states in zip(agents, trained)]
+    n = len(agents)
+    agreement, n_shared = np.full((n, n), np.nan), np.zeros((n, n), dtype=int)
+    for i in range(n):
+        for j in range(n):
+            shared = trained[i] & trained[j]
+            n_shared[i, j] = len(shared)
+            if shared:
+                agreement[i, j] = np.mean([policies[i][s] == policies[j][s] for s in shared])
+    return agreement, n_shared
+
+
+def plot_policy_agreement(groups, fname=None):
+    """
+    Heatmap of policy_agreement over every agent, stacked in group order, with white lines between groups.
+    Returns {(group a, group b): mean agreement over pairs of distinct agents}.
+
+    groups: dict of {group label: list of agents}
+    """
+    agents = [agent for group in groups.values() for agent in group]
+    agreement, _ = policy_agreement(agents)
+    sizes = [len(group) for group in groups.values()]
+    edges = np.concatenate([[0], np.cumsum(sizes)])
+
+    block_means = {}
+    labels = list(groups)
+    off_diagonal = ~np.eye(len(agents), dtype=bool)
+    for a in range(len(labels)):
+        for b in range(len(labels)):
+            block = agreement[edges[a]:edges[a + 1], edges[b]:edges[b + 1]]
+            mask = off_diagonal[edges[a]:edges[a + 1], edges[b]:edges[b + 1]]
+            block_means[(labels[a], labels[b])] = np.nanmean(block[mask]) if mask.any() else np.nan
+
+    fig, ax = plt.subplots(figsize=(6.5, 5.5))
+    im = ax.imshow(agreement, cmap=STEP_CMAP, vmin=0, vmax=1)
+    for edge in edges[1:-1]:
+        ax.axhline(edge - 0.5, color="white", linewidth=3)
+        ax.axvline(edge - 0.5, color="white", linewidth=3)
+    centers = (edges[:-1] + edges[1:]) / 2 - 0.5
+    ax.set_xticks(centers)
+    ax.set_xticklabels(labels)
+    ax.set_yticks(centers)
+    ax.set_yticklabels(labels, rotation=90, va="center")
+    ax.tick_params(length=0)
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+    ax.set_title("Greedy-action agreement between agents\n(over states both agents trained on)")
+    fig.colorbar(im, ax=ax, label="share of shared states with the same greedy action")
+    plt.tight_layout()
+    if fname:
+        plt.savefig(fname, dpi=300)
+    plt.show()
+    return block_means
