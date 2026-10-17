@@ -175,7 +175,7 @@ def train(env, agent, n_episodes=1000):
 
 if __name__ == "__main__":
     env = GridWorld(grid_size=6, glucose_target=50, glucose_max=100,
-                 n_food=20, max_steps=200, metabolism_rate=5, intake_amount=10, 
+                 n_food=20, max_steps=200, glucose_retention=0.9, intake_amount=10,
                  drive_n=2, drive_m=1, seed=None)
     agent = QLearningAgent(n_actions=env.n_actions, alpha=0.3, gamma=0.95,
                  epsilon_start=1.0, epsilon_min=0.05, epsilon_decay=0.7,

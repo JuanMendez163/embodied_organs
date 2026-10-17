@@ -23,6 +23,10 @@ ACTION_CATS = ["move", "eat", "idle"]
 CAT_COLORS = {"move": "#2a78d6", "eat": "#eb6834", "idle": "#1baf7a"}
 STRIP_CATS = ["eat", "idle"] # move is every other step, so it's left out of the trajectory action strip
 
+# metabolism plots: one color per move cost mode; resting decay is the same in both modes, so it gets a neutral gray
+MODE_COLORS = {"additive": "#2a78d6", "multiplicative": "#eb6834"}
+REST_COLOR = "#8c8b85"
+
 LINE_COLOR = "#2a78d6"
 LIGHT_LINE_COLOR = "#97bcea"
 FOOD_LEFT_COLOR = "#8c8b85"
@@ -211,6 +215,80 @@ def print_summary_table(summaries):
     print(f"{'agent':<18}{'eval env':<10}" + "".join(f"{s:>20}" for s in stat_names))
     for (a_label, e_label), stats in summaries.items():
         print(f"{a_label:<18}{e_label:<10}" + "".join(f"{stats[s]:>20.2f}" for s in stat_names))
+
+
+# ----------------------------------------------------------
+# Environment dynamics (no agent)
+# ----------------------------------------------------------
+
+def fixed_action_glucose(env_params, action, seed=None):
+    """
+    Glucose at every step of one episode where the same action is taken every step
+    (starting glucose included), using the real env dynamics.
+    Pass IDLE or a movement action; the agent never eats, so the episode ends by starvation or max_steps.
+    """
+    env = GridWorld(**env_params, seed=seed)
+    obs = env.reset()
+    glucose = [obs["glucose_level"]]
+    done = False
+    while not done:
+        obs, _, done, _ = env.step(action)
+        glucose.append(obs["glucose_level"])
+    return np.array(glucose)
+
+
+def plot_metabolism_dynamics(env_params, fname=None):
+    """
+    Sanity check of the metabolism, with no agent and no food. Left: glucose over an episode of
+    always resting (IDLE) vs always moving, for each move_cost_mode. Right: glucose lost per step
+    as a function of current glucose. Both modes take their other parameters from env_params, so the
+    move curves cross at glucose_target only if move_cost = (glucose_retention - move_retention) * glucose_target.
+    """
+    modes = list(MODE_COLORS)
+    mode_envs = {m: GridWorld(**{**env_params, "move_cost_mode": m}) for m in modes}
+    target, g_max = env_params["glucose_target"], env_params["glucose_max"]
+    threshold = mode_envs[modes[0]].starvation_threshold
+
+    fig, (ax_t, ax_c) = plt.subplots(1, 2, figsize=(12, 4))
+
+    # left: glucose over time under a fixed action (resting decay is the same in both modes)
+    ax_t.plot(fixed_action_glucose(env_params, Action.IDLE), color=REST_COLOR, linewidth=2, label="always IDLE")
+    for m in modes:
+        glucose = fixed_action_glucose({**env_params, "move_cost_mode": m}, Action.UP)
+        ax_t.plot(glucose, color=MODE_COLORS[m], linewidth=2, label=f"always move ({m})")
+    ax_t.axhline(target, color="gray", linestyle="--", linewidth=1)
+    ax_t.axhline(threshold, color="gray", linestyle=":", linewidth=1)
+    ax_t.set_ylim(0, None)
+    ax_t.set_xlabel("step")
+    ax_t.set_ylabel("glucose")
+    ax_t.set_title("glucose under a fixed action (no food)")
+
+    # right: per-step loss vs current glucose, straight from step_metabolism
+    g = np.linspace(0, g_max, 201)
+    def loss_curve(env, action):
+        losses = []
+        for gi in g:
+            env.current_glucose = gi
+            losses.append(env.step_metabolism(action))
+        return np.array(losses)
+    ax_c.plot(g, loss_curve(mode_envs[modes[0]], Action.IDLE), color=REST_COLOR, linewidth=2, label="IDLE / EAT")
+    for m in modes:
+        ax_c.plot(g, loss_curve(mode_envs[m], Action.UP), color=MODE_COLORS[m], linewidth=2, label=f"move ({m})")
+    ax_c.axvline(target, color="gray", linestyle="--", linewidth=1)
+    ax_c.set_xlim(0, g_max)
+    ax_c.set_ylim(0, None)
+    ax_c.set_xlabel("current glucose")
+    ax_c.set_ylabel("glucose lost this step")
+    ax_c.set_title("per-step metabolic cost")
+    ax_c.legend(frameon=False)
+
+    for ax in (ax_t, ax_c):
+        ax.spines[["top", "right"]].set_visible(False)
+    ax_t.legend(frameon=False)
+    plt.tight_layout()
+    if fname:
+        plt.savefig(fname, dpi=300)
+    plt.show()
 
 
 # ----------------------------------------------------------

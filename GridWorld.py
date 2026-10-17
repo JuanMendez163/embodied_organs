@@ -41,11 +41,24 @@ DELTAS = {
 
 class GridWorld:
     """
+    Homeostatic gridworld: an agent forages for food on a grid to keep its glucose near a target.
+
+    Glucose decays multiplicatively every step, g_{t+1} = glucose_retention * g_t, so the
+    per-step loss (1 - glucose_retention) * g is proportional to current glucose.
+    Movement actions pay an extra cost on top of that, set by move_cost_mode:
+     - "additive":       g_{t+1} = glucose_retention * g_t - move_cost  (fixed extra cost)
+     - "multiplicative": g_{t+1} = move_retention * g_t                 (extra cost grows with glucose)
+    The modes are matched at the target when move_cost = (glucose_retention - move_retention) * glucose_target.
+    Since decay alone never reaches 0, glucose below starvation_threshold is snapped to 0 (starvation).
+    Reward is the reduction in drive (distance from glucose_target), as in the Gutkin paper.
     """
 
     def __init__(self, grid_size=8, glucose_target=50, glucose_max=100,
-                 n_food=20, max_steps=200, metabolism_rate=5, intake_amount=10, 
-                 drive_n=2, drive_m=1, move_metabolism_rate=None, seed=None):
+                 n_food=20, max_steps=200, glucose_retention=0.98, move_cost_mode="additive",
+                 move_cost=2, move_retention=0.94, intake_amount=10, drive_n=2, drive_m=1,
+                 starvation_threshold=1.0, seed=None):
+        if move_cost_mode not in ("additive", "multiplicative"):
+            raise ValueError(f"move_cost_mode must be 'additive' or 'multiplicative', got {move_cost_mode!r}")
         self.np_random = np.random.default_rng(seed)
         
         self.grid_size = grid_size
@@ -54,9 +67,11 @@ class GridWorld:
         self.n_food = n_food # amount of food in environment
         self.max_steps = max_steps
 
-        self.metabolism_rate = metabolism_rate # glucose lost per IDLE or EAT step
-        # glucose lost per movement step (UP/DOWN/LEFT/RIGHT, even into a wall); None = same as metabolism_rate
-        self.move_metabolism_rate = metabolism_rate if move_metabolism_rate is None else move_metabolism_rate
+        self.glucose_retention = glucose_retention # gamma: fraction of glucose kept each step, g_{t+1} = gamma * g_t
+        self.move_cost_mode = move_cost_mode # how movement adds cost: "additive" (move_cost) or "multiplicative" (move_retention)
+        self.move_cost = move_cost # additive mode: extra glucose lost per movement step (UP/DOWN/LEFT/RIGHT, even into a wall)
+        self.move_retention = move_retention # multiplicative mode: fraction of glucose kept on a movement step (< glucose_retention)
+        self.starvation_threshold = starvation_threshold # glucose below this counts as starved (decay alone never hits 0)
         self.intake_amount = intake_amount # glucose gained per eat
 
         self.n_actions = len(Action)
@@ -141,12 +156,17 @@ class GridWorld:
 
     def step_metabolism(self, action):
         """
-        Glucose lost on a step taking this action: move_metabolism_rate for a movement action
-        (charged even if the move is blocked by a wall), metabolism_rate for IDLE and EAT.
+        Glucose lost on a step taking this action, given the current glucose (always >= 0).
+        IDLE and EAT lose (1 - glucose_retention) * current_glucose.
+        Movement actions (charged even if blocked by a wall) lose, depending on move_cost_mode:
+         - "additive":       (1 - glucose_retention) * current_glucose + move_cost
+         - "multiplicative": (1 - move_retention) * current_glucose
         """
         if Action(action) in (Action.IDLE, Action.EAT):
-            return self.metabolism_rate
-        return self.move_metabolism_rate
+            return (1 - self.glucose_retention) * self.current_glucose
+        if self.move_cost_mode == "additive":
+            return (1 - self.glucose_retention) * self.current_glucose + self.move_cost
+        return (1 - self.move_retention) * self.current_glucose
 
     def in_bounds(self, pos):
         """
@@ -173,7 +193,7 @@ class GridWorld:
 
         cur_drive = self._drive(self.drive_n, self.drive_m)
 
-        # Metabolism - how much glucose we lose each step; moving costs move_metabolism_rate, IDLE/EAT cost metabolism_rate
+        # Metabolism - glucose lost this step: proportional decay, plus an extra cost for movement actions (see step_metabolism)
         self.current_glucose = max(0, self.current_glucose-self.step_metabolism(self.action)) # min glucose value is 0
 
         if self.action not in DELTAS: # non-movement actions; right now only is EAT
@@ -187,6 +207,9 @@ class GridWorld:
             if self.in_bounds(new_pos): # checking if proposed position is within bounds of grid
                 self.agent_pos = new_pos
 
+        # pure exponential decay never reaches 0, so we need a starvation threshold to snap to 0
+        if self.current_glucose < self.starvation_threshold: # snap to 0 so starvation is terminal (agent checks glucose == 0)
+            self.current_glucose = 0
 
         new_drive = self._drive(self.drive_n, self.drive_m) # we calculate a new drive after action + env impact (metabolism)
         # no separate starvation penalty: glucose 0 is maximal drive, so starving already gives the
